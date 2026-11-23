@@ -74,7 +74,7 @@ esc_n1:        DB 0
 esc_n2:        DB 0
 dle_flag:      DB 0
 
-mlatch_shadow: DB ML_DS1 OR ML_DD
+mlatch_shadow: DB ML_DS1 | ML_DD
 vlatch_shadow: DB VLATCH_FINAL
 fdc_is_write:  DB 0
 
@@ -90,7 +90,7 @@ sysinit:
         LD A,VLATCH_FINAL
         LD (VLATCH),A
         LD (vlatch_shadow),A
-        LD A,ML_DS1 OR ML_DD
+        LD A,ML_DS1 | ML_DD
         LD (mlatch_shadow),A
         LD (MLATCH),A
         CALL crtc_init
@@ -541,17 +541,17 @@ fdc_transfer:
         CP 6
         JR NC,fdc_offline
 
-        LD A,ML_DS1 OR ML_DD
+        LD A,ML_DS1 | ML_DD
         LD (mlatch_shadow),A
         LD (MLATCH),A
 
-        LD A,FD_FORCE XOR 0FFH
+        LD A,(~FD_FORCE) & 0FFH
         LD (FCTRL),A
 
         LD A,(curtrak)
         CPL
         LD (FDATA),A
-        LD A,FD_SEEK_SLOW XOR 0FFH
+        LD A,(~FD_SEEK_SLOW) & 0FFH
         LD (FCTRL),A
         CALL fdc_wait_ready
 
@@ -628,10 +628,10 @@ fdc_wait_ready:
 ;==============================================================================
 
 dskinit:
-        LD A,ML_DS1 OR ML_DD
+        LD A,ML_DS1 | ML_DD
         LD (mlatch_shadow),A
         LD (MLATCH),A
-        LD A,FD_RESTORE XOR 0FFH
+        LD A,(~FD_RESTORE) & 0FFH
         LD (FCTRL),A
         CALL fdc_wait_ready
         XOR A
@@ -927,10 +927,10 @@ vid_put_char:
         AND 3
         JP NZ,vp_second
         LD A,L
-        ADD A,LOW VIDEO
+        ADD A,VIDEO_LO
         LD L,A
         LD A,H
-        ADC A,HIGH VIDEO
+        ADC A,VIDEO_HI
         LD H,A
         LD A,E
         LD (HL),A
@@ -939,7 +939,7 @@ vid_put_char:
 vp_second:
         LD A,(vlatch_shadow)
         LD B,A
-        LD A,VL_X_F OR VL_SWAP_VID2
+        LD A,VL_X_F | VL_SWAP_VID2
         LD (VLATCH),A
         LD A,E
         LD DE,CRT_VISIBLE1
@@ -959,10 +959,10 @@ vid_get_char:
         AND 3
         JP NZ,vg_second
         LD A,L
-        ADD A,LOW VIDEO
+        ADD A,VIDEO_LO
         LD L,A
         LD A,H
-        ADC A,HIGH VIDEO
+        ADC A,VIDEO_HI
         LD H,A
         LD A,(HL)
         POP HL
@@ -972,7 +972,7 @@ vg_second:
         PUSH BC
         LD A,(vlatch_shadow)
         LD B,A
-        LD A,VL_X_F OR VL_SWAP_VID2
+        LD A,VL_X_F | VL_SWAP_VID2
         LD (VLATCH),A
         LD DE,CRT_VISIBLE1
         OR A
@@ -1014,10 +1014,10 @@ clear_screen:
         LD HL,0
 cs_loop:
         LD A,L
-        CP LOW CRT_CELLS
+        CP CRT_CELLS_LO
         JR NZ,cs_fill
         LD A,H
-        CP HIGH CRT_CELLS
+        CP CRT_CELLS_HI
         RET Z
 cs_fill:
         PUSH HL
@@ -1077,10 +1077,10 @@ su_loop:
         POP HL
         INC HL
         LD A,L
-        CP LOW CRT_CELLS
+        CP CRT_CELLS_LO
         JR NZ,su_loop
         LD A,H
-        CP HIGH CRT_CELLS
+        CP CRT_CELLS_HI
         JR NZ,su_loop
 
         LD HL,CRT_CELLS-CRT_COLS

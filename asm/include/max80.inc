@@ -83,6 +83,11 @@ MATRIX       EQU IO_BASE+IO_MATRIX       ; F800H
 VIDEO        EQU IO_BASE+IO_VIDEO        ; FC00H
 SWAP1K       EQU IO_BASE+IO_SWAP1K       ; F000H
 
+; Byte-separation constants.  Written as EQU symbols rather than HIGH/LOW or
+; </> operators so the sources assemble with both pasmo and vasm (oldstyle).
+VIDEO_LO     EQU VIDEO & 0FFH
+VIDEO_HI     EQU VIDEO >> 8
+
 ; Addresses used during stage 1, before the I/O block is relocated.
 VLATCH_BOOT  EQU IO_BOOT+IO_VLATCH        ; 07DCH
 MLATCH_BOOT  EQU IO_BOOT+IO_MLATCH        ; 07D8H
@@ -110,7 +115,7 @@ VL_SWAP_VID2 EQU 002H       ; second half of video RAM (also 003H)
 VL_SWAP_FONT EQU 004H       ; character generator RAM (004H..007H)
 
 ; Final value: I/O at F000H, boot ROM hidden, ordinary RAM at 0000H..03FFH.
-VLATCH_FINAL EQU VL_X_F OR VL_SWAP_RAM
+VLATCH_FINAL EQU VL_X_F | VL_SWAP_RAM
 
 ;--- PIODA: 32 KB chunk selection ---------------------------------------------
 
@@ -128,7 +133,7 @@ PIO_HIGH_B1  EQU 080H
 PIO_HIGH_B2  EQU 0C0H
 
 ; Contiguous 64 KB of bank A RAM: A1 at 0000H, A2 at 8000H.
-PIO_LINEAR64 EQU PIO_LOW_A1 OR PIO_HIGH_A2      ; = 40H
+PIO_LINEAR64 EQU PIO_LOW_A1 | PIO_HIGH_A2       ; = 40H
 
 ;--- MLATCH bits ---------------------------------------------------------------
 
@@ -176,6 +181,8 @@ CRT_COLS     EQU 80
 CRT_ROWS     EQU 24
 CRT_CELLS    EQU CRT_COLS*CRT_ROWS            ; 1920 bytes -> needs both 1 KB halves
 CRT_VISIBLE1 EQU 400H                         ; cells in the first video RAM half
+CRT_CELLS_LO EQU CRT_CELLS & 0FFH
+CRT_CELLS_HI EQU CRT_CELLS >> 8
 
 ;--- Keyboard matrix row strobes ----------------------------------------------
 

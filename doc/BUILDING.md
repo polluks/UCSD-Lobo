@@ -4,7 +4,7 @@
 
 | Tool | Purpose |
 | :--- | :--- |
-| `pasmo` (or `zmac`) | Z80 cross-assembler |
+| `pasmo` or `vasm` (Z80, oldstyle syntax) | Z80 cross-assembler |
 | Python 3.9+ | Disk-image manipulation and checks |
 | `make` | Build driver |
 | z80pack UCSD p-System IV disk image | Source of `SYSTEM.INTERP` and `SYSTEM.PASCAL` |
@@ -57,14 +57,28 @@ Rename the result to `SYSTEM.MISCINFO` and include it in the build.
 
 ## 3. Assemble and create the image
 
+Either supported assembler can be selected with `ASM`; pasmo is the default:
+
 ```sh
-make PASMO=pasmo
-make PASMO=pasmo \
+make ASM=pasmo                       # or: make ASM=vasm
+make ASM=pasmo \
   INTERP=files/SYSTEM.INTERP \
   PASCAL=files/SYSTEM.PASCAL \
   MISCINFO=files/SYSTEM.MISCINFO \
   image
 make check
+```
+
+For vasm, build it with `make CPU=z80 SYNTAX=oldstyle` (the binary is
+`vasmz80_oldstyle`). Custom paths can be passed as `PASMO=...` / `VASM=...`, or
+as `ASMCMD=...` together with matching `PASMOFLAGS` / `VASMFLAGS`.
+
+The sources are deliberately written in the common subset of both assemblers:
+no `HIGH`/`LOW` or `<`/`>` byte operators and no `XOR`/`OR` expression keywords
+(bitwise `|`, `~` and `>>` are used instead). To confirm this remains true:
+
+```sh
+make check-portability
 ```
 
 ## 4. Write media

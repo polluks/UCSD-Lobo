@@ -205,7 +205,7 @@ dv_skip:
 ;------------------------------------------------------------------------------
 
 fdc_read_sector:
-        LD A,ML_DS1 OR ML_DD
+        LD A,ML_DS1 | ML_DD
         BIT 0,D
         JR Z,frs_side
         OR ML_SIDE
@@ -213,13 +213,13 @@ frs_side:
         LD (mlatch_shadow),A
         LD (MLATCH),A              ; select drive, density and side
 
-        LD A,FD_FORCE XOR 0FFH
+        LD A,(~FD_FORCE) & 0FFH
         LD (FCTRL),A               ; stop any previous command
 
         LD A,E
         CPL
         LD (FDATA),A               ; target track
-        LD A,FD_SEEK_SLOW XOR 0FFH
+        LD A,(~FD_SEEK_SLOW) & 0FFH
         LD (FCTRL),A
         CALL fdc_wait_ready
 

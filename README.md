@@ -69,9 +69,10 @@ The second 1 KB of video RAM is reached through the SWAP1K window by temporarily
 Build on a modern host with a Z80 cross-assembler (`pasmo`) and Python 3:
 
 ```sh
-make PASMO=pasmo
-make PASMO=pasmo INTERP=files/SYSTEM.INTERP PASCAL=files/SYSTEM.PASCAL image
+make                         # pasmo by default; use ASM=vasm for vasm
+make INTERP=files/SYSTEM.INTERP PASCAL=files/SYSTEM.PASCAL image
 make check
+make check-portability       # optional: verify both assemblers agree
 ```
 
 `doc/BUILDING.md` explains how to obtain `SYSTEM.INTERP` and `SYSTEM.PASCAL` from an adaptable p-System IV disk (for example the z80pack images) and how to configure `SYSTEM.MISCINFO` for the 80×24 console.
