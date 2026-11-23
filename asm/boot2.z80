@@ -1,0 +1,314 @@
+;------------------------------------------------------------------------------
+; boot2.z80 -- secondary bootstrap / system loader for UCSD p-System IV
+;
+; Loaded at BOOT2_LOAD by stage 1 after the I/O block has been moved to F000H
+; and the boot ROM overlay has been hidden.  This stage:
+;
+;   1. loads the SBIOS binary from reserved UCSD blocks,
+;   2. scans the p-System directory for SYSTEM.INTERP and loads it,
+;   3. pushes the 12 boot parameter words expected by the Interpreter's
+;      tertiary bootstrap,
+;   4. jumps to the Interpreter.
+;
+; The first byte of this image must be a JP (the tertiary bootstrap checks
+; for the 0C3H opcode), so entry begins with JP boot_start.
+;------------------------------------------------------------------------------
+
+        INCLUDE "config.inc"
+        INCLUDE "max80.inc"
+        INCLUDE "sbios.inc"
+
+        ORG BOOT2_LOAD
+
+        JP boot_start
+
+interp_name:
+        DB 13,"SYSTEM.INTERP"
+
+tmp_track:   DS 1
+tmp_rem:     DS 1
+mlatch_shadow: DS 1
+interp_first:  DW 0
+
+;------------------------------------------------------------------------------
+; Entry
+;------------------------------------------------------------------------------
+
+boot_start:
+        DI
+        LD SP,STACK_TOP
+
+        ; Re-assert the final memory map (stage 1 already set it).
+        LD A,PIO_LINEAR64
+        LD (PIODA),A
+        LD A,VLATCH_FINAL
+        LD (VLATCH),A
+
+        ; Load SBIOS from its reserved blocks into high RAM.
+        LD DE,SBIOS_BLOCK
+        LD HL,SBIOS_ORG
+        LD B,SBIOS_BLOCKS
+        CALL read_blocks
+        JR NZ,boot_fail
+
+        ; Read the flat directory into a RAM buffer.
+        LD DE,DIR_BLOCK
+        LD HL,DIR_BUFFER
+        LD B,DIR_BLOCKS
+        CALL read_blocks
+        JR NZ,boot_fail
+
+        ; Locate SYSTEM.INTERP.
+        CALL find_interp
+        JR NZ,boot_fail
+
+        ; Entry layout: first block (word), past-end block (word).
+        LD E,(HL)          ; first block, low
+        INC HL
+        LD D,(HL)          ; first block, high
+        INC HL
+        LD (interp_first),DE
+        LD C,(HL)          ; past-end, low
+        INC HL
+        LD A,(HL)          ; past-end, high
+        LD B,A
+        LD A,C
+        SUB E              ; block count (assumes < 256 blocks)
+        LD B,A
+
+        LD HL,INTERP_LOAD
+        CALL read_blocks
+        JR NZ,boot_fail
+
+        ; Boot parameter stack.  Words are pushed in reverse order so that
+        ; the first parameter ends up on top when the Interpreter starts.
+        LD HL,BOOT_MAX_BYTES
+        PUSH HL
+        LD HL,BOOT_MAX_SECTORS
+        PUSH HL
+        LD HL,BOOT_SKEW
+        PUSH HL
+        LD HL,BOOT_FIRST_PASCAL
+        PUSH HL
+        LD HL,BOOT_INTERLEAVE
+        PUSH HL
+        LD HL,BOOT_BYTES
+        PUSH HL
+        LD HL,BOOT_SECTORS
+        PUSH HL
+        LD HL,BOOT_TRACKS
+        PUSH HL
+        LD HL,RAM_HIGH
+        PUSH HL
+        LD HL,RAM_LOW
+        PUSH HL
+        LD HL,SBIOS_ORG
+        PUSH HL
+        LD HL,INTERP_LOAD
+        PUSH HL
+        LD HL,0            ; highest floppy drive (SBIOSTESTER)
+        PUSH HL
+
+        JP INTERP_ENTRY
+
+boot_fail:
+        ; No console driver yet: signal failure with the on-board beeper.
+        LD A,0
+        LD (BEEP),A
+        HALT
+        JR boot_fail
+
+;------------------------------------------------------------------------------
+; read_blocks -- read B consecutive UCSD blocks into HL
+; IN:  DE = first block, HL = destination, B = block count
+; OUT: A = 0 and Z on success, NZ on error
+;------------------------------------------------------------------------------
+
+read_blocks:
+rb_next:
+        PUSH DE
+        PUSH HL
+        PUSH BC
+        CALL block_to_chs
+        CALL fdc_read_sector
+        POP BC
+        POP HL
+        POP DE
+        RET NZ
+        PUSH BC
+        LD BC,512
+        ADD HL,BC
+        POP BC
+        INC DE
+        DJNZ rb_next
+        XOR A
+        RET
+
+;------------------------------------------------------------------------------
+; block_to_chs -- convert a UCSD block number to track/head/sector
+; IN:  DE = block number
+; OUT: E = track, D = head, B = sector (0-based); HL preserved
+;------------------------------------------------------------------------------
+
+block_to_chs:
+        PUSH HL
+        LD H,D
+        LD L,E
+        LD B,SECTORS_PER_TRACK*HEADS
+        CALL div16_8               ; HL = cylinder, A = sector within cylinder
+        LD (tmp_rem),A
+        LD A,H
+        LD (tmp_track),A
+        LD H,0
+        LD A,(tmp_rem)
+        LD L,A
+        LD B,SECTORS_PER_TRACK
+        CALL div16_8               ; L = head, A = sector
+        LD D,L
+        LD B,A
+        LD A,(tmp_track)
+        LD E,A
+        POP HL
+        RET
+
+;------------------------------------------------------------------------------
+; div16_8 -- divide HL by B, returning HL = quotient and A = remainder
+; Divisor must be <= 127 (17 and 34 are used here).
+;------------------------------------------------------------------------------
+
+div16_8:
+        PUSH BC
+        PUSH DE
+        LD D,B
+        LD E,0
+        LD B,16
+dv_loop:
+        ADD HL,HL
+        RL E
+        LD A,E
+        CP D
+        JR C,dv_skip
+        SUB D
+        LD E,A
+        INC L
+dv_skip:
+        DJNZ dv_loop
+        LD A,E
+        POP DE
+        POP BC
+        RET
+
+;------------------------------------------------------------------------------
+; fdc_read_sector -- read one 512-byte physical sector
+; IN:  E = track, D = head, B = sector (0-based), HL = destination
+; OUT: A = 0 and Z on success, NZ on error
+;------------------------------------------------------------------------------
+
+fdc_read_sector:
+        LD A,ML_DS1 OR ML_DD
+        BIT 0,D
+        JR Z,frs_side
+        OR ML_SIDE
+frs_side:
+        LD (mlatch_shadow),A
+        LD (MLATCH),A              ; select drive, density and side
+
+        LD A,FD_FORCE XOR 0FFH
+        LD (FCTRL),A               ; stop any previous command
+
+        LD A,E
+        CPL
+        LD (FDATA),A               ; target track
+        LD A,FD_SEEK_SLOW XOR 0FFH
+        LD (FCTRL),A
+        CALL fdc_wait_ready
+
+        LD A,E
+        CPL
+        LD (FTRACK),A
+        LD A,B
+        CPL
+        LD (FSECTOR),A
+
+        LD A,FD_READ
+        BIT 0,D
+        JR Z,frs_cmd
+        OR 8                       ; side 1 command variant
+frs_cmd:
+        CPL
+        LD (FCTRL),A
+
+        LD BC,512
+frs_loop:
+        CALL fdc_wait_drq
+        LD A,(FDATA)
+        CPL
+        LD (HL),A
+        INC HL
+        DEC BC
+        LD A,B
+        OR C
+        JR NZ,frs_loop
+
+        LD A,(FSTAT)
+        CPL
+        AND 09FH                   ; ignore write-protect and write-fault
+        RET
+
+fdc_wait_drq:
+        LD A,(FSTAT)
+        CPL
+        BIT 1,A
+        JR Z,fdc_wait_drq
+        RET
+
+fdc_wait_ready:
+        LD A,(FSTAT)
+        CPL
+        BIT 0,A
+        JR NZ,fdc_wait_ready
+        RET
+
+;------------------------------------------------------------------------------
+; find_interp -- scan the directory for SYSTEM.INTERP
+; OUT: HL = entry address on success (Z), A != 0 on failure (NZ)
+;------------------------------------------------------------------------------
+
+find_interp:
+        LD HL,DIR_BUFFER
+        LD B,DIR_ENTRIES
+fi_loop:
+        PUSH HL
+        PUSH BC
+        LD DE,interp_name
+        CALL name_equal
+        POP BC
+        POP HL
+        JR Z,fi_found
+        LD DE,DIR_ENTRY_SIZE
+        ADD HL,DE
+        DJNZ fi_loop
+        LD A,1
+        RET
+fi_found:
+        RET
+
+; Compare the length-prefixed name at HL with the one at DE.
+name_equal:
+        LD A,(DE)
+        CP (HL)
+        RET NZ
+        LD B,A
+        INC HL
+        INC DE
+ne_loop:
+        LD A,(DE)
+        CP (HL)
+        RET NZ
+        INC HL
+        INC DE
+        DJNZ ne_loop
+        XOR A
+        RET
+
+        END

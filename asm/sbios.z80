@@ -1,0 +1,1099 @@
+;------------------------------------------------------------------------------
+; sbios.z80 -- UCSD p-System IV SBIOS for the Lobo MAX-80
+;
+; Implements the 15 mandatory SBIOS vectors at offsets 00H..2AH plus the 13
+; extended vectors at 2DH..51H.  The vector table is at SBIOS_ORG (0E000H),
+; below the memory-mapped I/O block at F000H.
+;
+; Hardware assumptions (verified against Lobo ROM/BIOS sources):
+;   * I/O block relocated to F000H (VLATCH = F1H)
+;   * PIO data A = 40H: bank A chunk A1 at 0000H, A2 at 8000H
+;   * FDC registers are complemented on every access
+;   * video RAM: first 1 KB at FC00H, second 1 KB via SWAP1K
+;   * keyboard: 8x8 matrix at F800H
+;------------------------------------------------------------------------------
+
+        INCLUDE "config.inc"
+        INCLUDE "max80.inc"
+        INCLUDE "sbios.inc"
+
+        ORG SBIOS_ORG
+
+;--- Mandatory vector table ----------------------------------------------------
+
+        JP sysinit             ; 00H
+        JP syshalt             ; 03H
+        JP coninit             ; 06H
+        JP constat             ; 09H
+        JP conread             ; 0CH
+        JP conwrit             ; 0FH
+        JP setdisk             ; 12H
+        JP settrak             ; 15H
+        JP setsec              ; 18H
+        JP setbufr             ; 1BH
+        JP dskread             ; 1EH
+        JP dskwrit             ; 21H
+        JP dskinit             ; 24H
+        JP dskstrt             ; 27H
+        JP dskstop             ; 2AH
+
+;--- Extended vector table -----------------------------------------------------
+
+        JP prninit             ; 2DH
+        JP prnstat             ; 30H
+        JP prnread             ; 33H
+        JP prnwrit             ; 36H
+        JP reminit             ; 39H
+        JP remstat             ; 3CH
+        JP remread             ; 3FH
+        JP remwrit             ; 42H
+        JP usrinit             ; 45H
+        JP usrstat             ; 48H
+        JP usrread             ; 4BH
+        JP usrwrit             ; 4EH
+        JP clkread             ; 51H
+
+;--- State variables -----------------------------------------------------------
+
+interp_jump:   DW 0
+curdisk:       DB 0
+curtrak:       DW 0
+cursect:       DB 1
+curbufr:       DW 0
+
+kbd_pending:   DB 0
+kbd_flag:      DB 0
+kbd_shift:     DB 0
+kbd_col:       DB 0
+kbd_row:       DB 0
+
+cursor_x:      DB 0
+cursor_y:      DB 0
+esc_state:     DB 0
+esc_n1:        DB 0
+esc_n2:        DB 0
+dle_flag:      DB 0
+
+mlatch_shadow: DB ML_DS1 OR ML_DD
+vlatch_shadow: DB VLATCH_FINAL
+fdc_is_write:  DB 0
+
+;==============================================================================
+; SYSINIT -- BC = address of the Interpreter jump table
+;==============================================================================
+
+sysinit:
+        LD (interp_jump),BC
+        DI
+        LD A,PIO_LINEAR64
+        LD (PIODA),A
+        LD A,VLATCH_FINAL
+        LD (VLATCH),A
+        LD (vlatch_shadow),A
+        LD A,ML_DS1 OR ML_DD
+        LD (mlatch_shadow),A
+        LD (MLATCH),A
+        CALL crtc_init
+        CALL sio_init
+        XOR A
+        LD (kbd_flag),A
+        LD (kbd_shift),A
+        LD (esc_state),A
+        LD (dle_flag),A
+        LD (cursor_x),A
+        LD (cursor_y),A
+        LD A,IO_OK
+        RET
+
+;==============================================================================
+; SYSHALT
+;==============================================================================
+
+syshalt:
+        DI
+sh_loop:
+        HALT
+        JR sh_loop
+
+;==============================================================================
+; CONINIT
+;==============================================================================
+
+coninit:
+        CALL crtc_init
+        XOR A
+        LD (cursor_x),A
+        LD (cursor_y),A
+        CALL clear_screen
+        LD A,IO_OK
+        RET
+
+;==============================================================================
+; CONSTAT -- A = IORESULT, C = 0/FF
+;==============================================================================
+
+constat:
+        CALL scan_keyboard
+        LD B,IO_OK
+        LD C,0
+        LD A,(kbd_flag)
+        OR A
+        RET Z
+        LD C,0FFH
+        LD A,B
+        RET
+
+;==============================================================================
+; CONREAD -- A = IORESULT, C = character
+;==============================================================================
+
+conread:
+cr_wait:
+        CALL scan_keyboard
+        LD A,(kbd_flag)
+        OR A
+        JR Z,cr_wait
+        LD A,(kbd_pending)
+        LD C,A
+        XOR A
+        LD (kbd_flag),A
+        LD A,IO_OK
+        RET
+
+;==============================================================================
+; CONWRIT -- output character in C
+;==============================================================================
+
+conwrit:
+        LD A,(dle_flag)
+        OR A
+        JP NZ,cw_expand
+
+        LD A,C
+        OR A
+        RET Z                       ; NUL is ignored
+        CP CH_ESC
+        JP Z,cw_escape_start
+
+        LD A,(esc_state)
+        OR A
+        JP NZ,cw_escape_data
+
+        CP CH_DLE
+        JR Z,cw_dle
+        CP CH_CR
+        JR Z,cw_cr
+        CP CH_LF
+        JR Z,cw_lf
+        CP CH_BS
+        JR Z,cw_bs
+        CP CH_TAB
+        JP Z,cw_tab
+
+        LD A,C
+        CALL vid_put_char
+        CALL cursor_advance
+        LD A,IO_OK
+        RET
+
+cw_expand:
+        XOR A
+        LD (dle_flag),A
+        LD A,C
+        OR A
+        RET Z
+        LD B,A
+cwe_loop:
+        PUSH BC
+        LD A,' '
+        CALL vid_put_char
+        CALL cursor_advance
+        POP BC
+        DJNZ cwe_loop
+        LD A,IO_OK
+        RET
+
+cw_dle:
+        LD A,1
+        LD (dle_flag),A
+        LD A,IO_OK
+        RET
+
+cw_cr:
+        XOR A
+        LD (cursor_x),A
+        LD A,IO_OK
+        RET
+
+cw_lf:
+        LD A,(cursor_y)
+        INC A
+        LD (cursor_y),A
+        CP CRT_ROWS
+        JR C,cw_lf_done
+        LD A,CRT_ROWS-1
+        LD (cursor_y),A
+        CALL scroll_up
+cw_lf_done:
+        LD A,IO_OK
+        RET
+
+cw_bs:
+        LD A,(cursor_x)
+        OR A
+        JR Z,cw_bs_done
+        DEC A
+        LD (cursor_x),A
+cw_bs_done:
+        LD A,IO_OK
+        RET
+
+cw_tab:
+        LD A,(cursor_x)
+        ADD A,8
+        AND 0F8H
+        CP CRT_COLS
+        JR C,cw_tab_ok
+        XOR A
+        LD (cursor_x),A
+        JP cw_lf
+cw_tab_ok:
+        LD (cursor_x),A
+        LD A,IO_OK
+        RET
+
+;--- Escape sequence parser ----------------------------------------------------
+; ESC H           home
+; ESC J           clear screen
+; ESC [ H         home
+; ESC [ r;c H     cursor to row r, column c (1-based)
+; ESC [ J / K     erase to end of screen / line
+; ESC [ A/B/C/D   cursor up/down/right/left
+;------------------------------------------------------------------------------
+
+cw_escape_start:
+        LD A,1
+        LD (esc_state),A
+        LD A,IO_OK
+        RET
+
+cw_escape_data:
+        LD A,(esc_state)
+        CP 1
+        JP Z,cw_esc_first
+        CP 2
+        JP Z,cw_esc_bracket
+        CP 3
+        JP Z,cw_esc_digits1
+        JP cw_esc_digits2
+
+cw_esc_first:
+        LD A,C
+        CP '['
+        JR Z,cw_esc_got_bracket
+        CP 'H'
+        JP Z,cw_esc_home
+        CP 'J'
+        JP Z,cw_esc_clear
+        XOR A
+        LD (esc_state),A
+        LD A,IO_OK
+        RET
+cw_esc_got_bracket:
+        LD A,2
+        LD (esc_state),A
+        XOR A
+        LD (esc_n1),A
+        LD (esc_n2),A
+        LD A,IO_OK
+        RET
+
+cw_esc_bracket:
+        LD A,C
+        CP 'H'
+        JP Z,cw_esc_home
+        CP 'J'
+        JP Z,cw_esc_clear
+        CP 'K'
+        JP Z,cw_esc_eol
+        CP 'A'
+        JP Z,cw_esc_up
+        CP 'B'
+        JP Z,cw_esc_down
+        CP 'C'
+        JP Z,cw_esc_right
+        CP 'D'
+        JP Z,cw_esc_left
+        CP '0'
+        JR C,cw_esc_bad
+        CP '9'
+        JR NC,cw_esc_bad
+        SUB '0'
+        LD (esc_n1),A
+        LD A,3
+        LD (esc_state),A
+        LD A,IO_OK
+        RET
+cw_esc_bad:
+        XOR A
+        LD (esc_state),A
+        LD A,IO_OK
+        RET
+
+cw_esc_digits1:
+        LD A,C
+        CP ';'
+        JR Z,cw_esc_semi
+        CP '0'
+        JR C,cw_esc_dispatch1
+        CP '9'
+        JR NC,cw_esc_dispatch1
+        LD A,(esc_n1)
+        CALL accum_digit
+        LD (esc_n1),A
+        LD A,IO_OK
+        RET
+cw_esc_semi:
+        LD A,4
+        LD (esc_state),A
+        LD A,IO_OK
+        RET
+cw_esc_dispatch1:
+        LD A,C
+        CP 'H'
+        JP Z,cw_esc_gotoxy1
+        XOR A
+        LD (esc_state),A
+        LD A,IO_OK
+        RET
+cw_esc_gotoxy1:
+        LD A,(esc_n1)
+        OR A
+        JP Z,cw_esc_home
+        DEC A
+        LD (cursor_y),A
+        XOR A
+        LD (cursor_x),A
+        XOR A
+        LD (esc_state),A
+        LD A,IO_OK
+        RET
+
+cw_esc_digits2:
+        LD A,C
+        CP '0'
+        JR C,cw_esc_dispatch2
+        CP '9'
+        JR NC,cw_esc_dispatch2
+        LD A,(esc_n2)
+        CALL accum_digit
+        LD (esc_n2),A
+        LD A,IO_OK
+        RET
+cw_esc_dispatch2:
+        LD A,C
+        CP 'H'
+        JP Z,cw_esc_gotoxy2
+        XOR A
+        LD (esc_state),A
+        LD A,IO_OK
+        RET
+cw_esc_gotoxy2:
+        LD A,(esc_n1)
+        OR A
+        JP Z,cw_esc_home
+        DEC A
+        LD (cursor_y),A
+        LD A,(esc_n2)
+        OR A
+        JP Z,cw_esc_home
+        DEC A
+        LD (cursor_x),A
+        XOR A
+        LD (esc_state),A
+        LD A,IO_OK
+        RET
+
+cw_esc_home:
+        XOR A
+        LD (cursor_x),A
+        LD (cursor_y),A
+        XOR A
+        LD (esc_state),A
+        LD A,IO_OK
+        RET
+
+cw_esc_clear:
+        CALL clear_screen
+        XOR A
+        LD (cursor_x),A
+        LD (cursor_y),A
+        XOR A
+        LD (esc_state),A
+        LD A,IO_OK
+        RET
+
+cw_esc_eol:
+        CALL erase_to_eol
+        XOR A
+        LD (esc_state),A
+        LD A,IO_OK
+        RET
+
+cw_esc_up:
+        LD A,(cursor_y)
+        OR A
+        JR Z,cw_esc_move_done
+        DEC A
+        LD (cursor_y),A
+        JR cw_esc_move_done
+cw_esc_down:
+        LD A,(cursor_y)
+        CP CRT_ROWS-1
+        JR NC,cw_esc_move_done
+        INC A
+        LD (cursor_y),A
+        JR cw_esc_move_done
+cw_esc_right:
+        LD A,(cursor_x)
+        CP CRT_COLS-1
+        JR NC,cw_esc_move_done
+        INC A
+        LD (cursor_x),A
+        JR cw_esc_move_done
+cw_esc_left:
+        LD A,(cursor_x)
+        OR A
+        JR Z,cw_esc_move_done
+        DEC A
+        LD (cursor_x),A
+cw_esc_move_done:
+        XOR A
+        LD (esc_state),A
+        LD A,IO_OK
+        RET
+
+; IN: A = accumulated value, C = digit character; OUT: A = A*10+digit
+accum_digit:
+        LD B,A
+        LD A,C
+        SUB '0'
+        LD E,A
+        LD A,B
+        ADD A,A                 ; 2x
+        LD D,A
+        ADD A,A                 ; 4x
+        ADD A,A                 ; 8x
+        ADD A,D                 ; 10x
+        ADD A,E
+        RET
+
+;==============================================================================
+; Disk state setters
+;==============================================================================
+
+setdisk:
+        LD A,C
+        LD (curdisk),A
+        LD A,IO_OK
+        RET
+
+settrak:
+        LD (curtrak),BC
+        LD A,IO_OK
+        RET
+
+setsec:
+        LD A,C
+        LD (cursect),A
+        LD A,IO_OK
+        RET
+
+setbufr:
+        LD (curbufr),BC
+        LD A,IO_OK
+        RET
+
+;==============================================================================
+; DSKREAD / DSKWRIT
+;==============================================================================
+
+dskread:
+        XOR A
+        LD (fdc_is_write),A
+        CALL fdc_transfer
+        RET NZ
+        LD A,IO_OK
+        RET
+
+dskwrit:
+        LD A,1
+        LD (fdc_is_write),A
+        CALL fdc_transfer
+        XOR A
+        LD (fdc_is_write),A
+        RET NZ
+        LD A,IO_OK
+        RET
+
+fdc_transfer:
+        LD A,(curdisk)
+        CP 6
+        JR NC,fdc_offline
+
+        LD A,ML_DS1 OR ML_DD
+        LD (mlatch_shadow),A
+        LD (MLATCH),A
+
+        LD A,FD_FORCE XOR 0FFH
+        LD (FCTRL),A
+
+        LD A,(curtrak)
+        CPL
+        LD (FDATA),A
+        LD A,FD_SEEK_SLOW XOR 0FFH
+        LD (FCTRL),A
+        CALL fdc_wait_ready
+
+        LD A,(curtrak)
+        CPL
+        LD (FTRACK),A
+
+        LD A,(cursect)
+        SUB PHYS_SECTOR_BIAS
+        CPL
+        LD (FSECTOR),A
+
+        LD A,FD_READ
+        LD B,A
+        LD A,(fdc_is_write)
+        OR A
+        JR Z,ft_command
+        LD B,FD_WRITE
+ft_command:
+        LD A,B
+        CPL
+        LD (FCTRL),A
+
+        LD HL,(curbufr)
+        LD BC,512
+ft_loop:
+        CALL fdc_wait_drq
+        LD A,(fdc_is_write)
+        OR A
+        JR NZ,ft_write_byte
+        LD A,(FDATA)
+        CPL
+        LD (HL),A
+        JR ft_next
+ft_write_byte:
+        LD A,(HL)
+        CPL
+        LD (FDATA),A
+ft_next:
+        INC HL
+        DEC BC
+        LD A,B
+        OR C
+        JR NZ,ft_loop
+
+        LD A,(FSTAT)
+        CPL
+        AND 09FH
+        RET NZ
+        XOR A
+        RET
+
+fdc_offline:
+        LD A,IO_OFFLINE
+        OR A
+        RET
+
+fdc_wait_drq:
+        LD A,(FSTAT)
+        CPL
+        BIT 1,A
+        JR Z,fdc_wait_drq
+        RET
+
+fdc_wait_ready:
+        LD A,(FSTAT)
+        CPL
+        BIT 0,A
+        JR NZ,fdc_wait_ready
+        RET
+
+;==============================================================================
+; Disk management
+;==============================================================================
+
+dskinit:
+        LD A,ML_DS1 OR ML_DD
+        LD (mlatch_shadow),A
+        LD (MLATCH),A
+        LD A,FD_RESTORE XOR 0FFH
+        LD (FCTRL),A
+        CALL fdc_wait_ready
+        XOR A
+        RET
+
+dskstrt:
+        LD A,(mlatch_shadow)
+        LD (MLATCH),A
+        XOR A
+        RET
+
+dskstop:
+        XOR A
+        RET
+
+;==============================================================================
+; Extended SBIOS
+;==============================================================================
+
+prninit:
+        XOR A
+        RET
+
+prnstat:
+        LD A,IO_OK
+        LD C,0FFH
+        RET
+
+prnread:
+        LD A,IO_OK
+        LD C,0
+        RET
+
+prnwrit:
+        LD A,C
+        LD (PDATA),A
+        XOR A
+        RET
+
+reminit:
+        LD A,BAUD_9600
+        LD (BAUDA),A
+        XOR A
+        RET
+
+remstat:
+        LD A,IO_OK
+        LD C,0
+        RET
+
+remread:
+        LD A,IO_OK
+        LD C,0
+        RET
+
+remwrit:
+        XOR A
+        RET
+
+usrinit:
+        XOR A
+        RET
+
+usrstat:
+        XOR A
+        RET
+
+usrread:
+        XOR A
+        RET
+
+usrwrit:
+        XOR A
+        RET
+
+; CLKREAD: DE = low 16 bits, HL = high 16 bits (seconds since midnight)
+clkread:
+        LD A,0AH
+        CALL rtc_read
+        LD E,A
+        LD D,0
+
+        LD A,0BH
+        CALL rtc_read
+        CALL mul60
+        ADD HL,DE
+        EX DE,HL
+
+        LD A,0CH
+        CALL rtc_read
+        LD B,A
+        LD HL,0
+clk_hour_loop:
+        LD A,B
+        OR A
+        JR Z,clk_hour_done
+        PUSH DE
+        LD DE,3600
+        ADD HL,DE
+        POP DE
+        DEC B
+        JR clk_hour_loop
+clk_hour_done:
+        ADD HL,DE
+        EX DE,HL
+        LD HL,0
+        LD A,IO_OK
+        RET
+
+; HL = HL * 60 (HL <= 59 on entry)
+mul60:
+        LD B,L
+        LD H,0
+        XOR A
+        LD L,A
+m60_loop:
+        LD A,B
+        OR A
+        RET Z
+        LD DE,60
+        ADD HL,DE
+        DEC B
+        JR m60_loop
+
+; IN: A = RTC register; OUT: A = BCD value
+rtc_read:
+        AND 0FH
+        OR 020H
+        LD (PIODB),A
+        LD A,(PIODA)
+        AND 0FH
+        RET
+
+;==============================================================================
+; CRTC initialization: 80 columns x 24 rows, 9 scan lines
+;==============================================================================
+
+crtc_init:
+        LD HL,crtc_table
+        LD B,crtc_table_end-crtc_table
+ci_loop:
+        LD A,(HL)
+        LD (CRTREG),A
+        INC HL
+        LD A,(HL)
+        LD (CRTBYT),A
+        INC HL
+        DJNZ ci_loop
+        RET
+
+crtc_table:
+        DB 0,119
+        DB 1,80
+        DB 2,97
+        DB 3,6
+        DB 4,27
+        DB 5,12
+        DB 6,24
+        DB 7,26
+        DB 8,0
+        DB 9,8
+        DB 12,0
+        DB 13,0
+crtc_table_end:
+
+;==============================================================================
+; SIO initialization: channel A at 9600 baud, 8N1
+;==============================================================================
+
+sio_init:
+        LD A,BAUD_9600
+        LD (BAUDA),A
+        LD HL,sio_table
+        LD B,(sio_table_end-sio_table)/2
+si_loop:
+        LD A,(HL)
+        LD (SIOCA),A
+        INC HL
+        LD A,(HL)
+        LD (SIOCA),A
+        INC HL
+        DJNZ si_loop
+        RET
+
+sio_table:
+        DB 4,48H
+        DB 3,0E1H
+        DB 5,0EAH
+        DB 1,00H
+sio_table_end:
+
+;==============================================================================
+; Keyboard scanning (8 rows x 8 columns at F800H)
+;==============================================================================
+
+scan_keyboard:
+        LD A,(kbd_flag)
+        OR A
+        RET NZ
+
+        LD B,8
+        LD C,1
+sk_row:
+        LD HL,MATRIX
+        LD A,C
+        ADD A,L
+        LD L,A
+        LD A,(HL)
+        OR A
+        JR Z,sk_next_row
+
+        LD E,A
+        LD D,0
+sk_bit:
+        BIT 0,E
+        JR NZ,sk_found
+        SRL E
+        INC D
+        JR sk_bit
+
+sk_found:
+        LD A,D
+        LD (kbd_col),A
+        LD A,8
+        SUB B
+        LD (kbd_row),A
+        ADD A,A
+        ADD A,A
+        ADD A,A                    ; row * 8
+        LD E,A
+        LD D,0
+        LD A,(kbd_col)
+        ADD A,E
+        LD E,A
+        LD HL,keytable
+        ADD HL,DE
+        LD A,(HL)
+        LD E,A                     ; character
+
+        LD A,(kbd_row)
+        CP 7
+        JR NZ,sk_regular
+        LD A,(kbd_col)
+        CP 0
+        JR Z,sk_shift
+        CP 7
+        JR Z,sk_ctrl
+        JR sk_regular
+
+sk_shift:
+        LD A,1
+        LD (kbd_shift),A
+        JR sk_next_row
+sk_ctrl:
+        XOR A
+        LD (kbd_shift),A
+        JR sk_next_row
+
+sk_regular:
+        LD A,E
+        OR A
+        JR Z,sk_next_row
+        LD (kbd_pending),A
+        LD A,1
+        LD (kbd_flag),A
+        XOR A
+        LD (kbd_shift),A
+        RET
+
+sk_next_row:
+        SRL C
+        DJNZ sk_row
+        RET
+
+keytable:
+        DB '@','A','B','C','D','E','F','G'
+        DB 'H','I','J','K','L','M','N','O'
+        DB 'P','Q','R','S','T','U','V','W'
+        DB 'X','Y','Z','[','\\',']','^','_'
+        DB '0','1','2','3','4','5','6','7'
+        DB '8','9',':',';',',','-','.','/'
+        DB 0DH,08H,03H,1CH,1DH,1EH,1FH,20H
+        DB 00H,0FCH,0FDH,0FEH,0FFH,1BH,00H,00H
+
+;==============================================================================
+; Video helpers
+; HL = linear cell offset (0..1919), A = character
+;==============================================================================
+
+vid_put_char:
+        LD E,A
+        LD A,H
+        AND 3
+        JP NZ,vp_second
+        LD A,L
+        ADD A,LOW VIDEO
+        LD L,A
+        LD A,H
+        ADC A,HIGH VIDEO
+        LD H,A
+        LD A,E
+        LD (HL),A
+        RET
+
+vp_second:
+        LD A,(vlatch_shadow)
+        LD B,A
+        LD A,VL_X_F OR VL_SWAP_VID2
+        LD (VLATCH),A
+        LD A,E
+        LD DE,CRT_VISIBLE1
+        OR A
+        SBC HL,DE
+        LD DE,SWAP1K
+        ADD HL,DE
+        LD (HL),A
+        LD A,B
+        LD (VLATCH),A
+        RET
+
+; IN: HL = offset; OUT: A = character; HL preserved
+vid_get_char:
+        PUSH HL
+        LD A,H
+        AND 3
+        JP NZ,vg_second
+        LD A,L
+        ADD A,LOW VIDEO
+        LD L,A
+        LD A,H
+        ADC A,HIGH VIDEO
+        LD H,A
+        LD A,(HL)
+        POP HL
+        RET
+
+vg_second:
+        PUSH BC
+        LD A,(vlatch_shadow)
+        LD B,A
+        LD A,VL_X_F OR VL_SWAP_VID2
+        LD (VLATCH),A
+        LD DE,CRT_VISIBLE1
+        OR A
+        SBC HL,DE
+        LD DE,SWAP1K
+        ADD HL,DE
+        LD A,(HL)
+        LD C,A
+        LD A,B
+        LD (VLATCH),A
+        LD A,C
+        POP BC
+        POP HL
+        RET
+
+;==============================================================================
+; Screen maintenance
+;==============================================================================
+
+cursor_advance:
+        LD A,(cursor_x)
+        INC A
+        CP CRT_COLS
+        JR C,ca_done
+        XOR A
+        LD (cursor_x),A
+        LD A,(cursor_y)
+        INC A
+        LD (cursor_y),A
+        CP CRT_ROWS
+        JR C,ca_done
+        LD A,CRT_ROWS-1
+        LD (cursor_y),A
+        CALL scroll_up
+ca_done:
+        RET
+
+clear_screen:
+        LD HL,0
+cs_loop:
+        LD A,L
+        CP LOW CRT_CELLS
+        JR NZ,cs_fill
+        LD A,H
+        CP HIGH CRT_CELLS
+        RET Z
+cs_fill:
+        PUSH HL
+        LD A,' '
+        CALL vid_put_char
+        POP HL
+        INC HL
+        JP cs_loop
+
+; IN: A = row number; OUT: HL = row * 80
+row_offset:
+        LD L,A
+        LD H,0
+        ADD HL,HL
+        ADD HL,HL
+        ADD HL,HL
+        ADD HL,HL                  ; x16
+        LD D,L
+        LD E,H
+        ADD HL,HL
+        ADD HL,HL                  ; x64
+        ADD HL,DE                  ; x80
+        RET
+
+erase_to_eol:
+        LD A,(cursor_y)
+        CALL row_offset
+        LD A,(cursor_x)
+        LD E,A
+        LD D,0
+        ADD HL,DE
+        LD A,CRT_COLS
+        SUB E
+        LD B,A
+        OR A
+        RET Z
+ete_loop:
+        PUSH HL
+        PUSH BC
+        LD A,' '
+        CALL vid_put_char
+        POP BC
+        POP HL
+        INC HL
+        DJNZ ete_loop
+        RET
+
+scroll_up:
+        LD HL,CRT_COLS
+su_loop:
+        PUSH HL
+        CALL vid_get_char
+        LD DE,CRT_COLS
+        OR A
+        SBC HL,DE
+        CALL vid_put_char
+        POP HL
+        INC HL
+        LD A,L
+        CP LOW CRT_CELLS
+        JR NZ,su_loop
+        LD A,H
+        CP HIGH CRT_CELLS
+        JR NZ,su_loop
+
+        LD HL,CRT_CELLS-CRT_COLS
+        LD B,CRT_COLS
+su_clear:
+        PUSH HL
+        PUSH BC
+        LD A,' '
+        CALL vid_put_char
+        POP BC
+        POP HL
+        INC HL
+        DJNZ su_clear
+        RET
+
+        END

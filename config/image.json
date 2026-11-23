@@ -1,0 +1,12 @@
+{
+  "block_size": 512,
+  "blocks": 1309,
+  "dir_block": 2,
+  "dir_blocks": 4,
+  "boot1_block": 0,
+  "boot2_block": 1,
+  "sbios_block": 10,
+  "sbios_blocks": 8,
+  "first_file_block": 18,
+  "fill": "0xE5"
+}

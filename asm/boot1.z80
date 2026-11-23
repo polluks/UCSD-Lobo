@@ -1,0 +1,62 @@
+;------------------------------------------------------------------------------
+; boot1.z80 -- Lobo MAX-80 primary bootstrap for UCSD p-System IV
+;
+; The MAX-80 boot ROM reads track 0, sector 0 into 0400H and jumps there.
+; On entry the ROM has already:
+;   * initialized the PIO and selected contiguous 64 KB of bank A RAM
+;     (PIO data A = 40H: A1 at 0000H, A2 at 8000H),
+;   * left IY pointing at MLATCH (07D8H),
+;   * set AF' = 0/Z (floppy) and A = head 0 for the ROM READ routine,
+;   * set SP = 06FFH.
+;
+; This stage uses the ROM's own READ entry at 0003H to fetch stage 2, then
+; moves the 4 KB I/O block from 0000H to F000H, hides the boot ROM overlay,
+; and jumps to stage 2.
+;
+; ROM READ calling convention (from MAXROM13.MAC):
+;   HL = destination, DE = track, B = first sector, C = last sector,
+;   A  = head (0-based), AF' = 0/Z for floppy.
+;   Returns with NC on success and HL advanced past the data; retries
+;   indefinitely on error.
+;------------------------------------------------------------------------------
+
+        INCLUDE "config.inc"
+        INCLUDE "max80.inc"
+
+        ORG BOOT_LOAD
+
+entry:
+        DI
+        LD SP,BOOT_STACK
+
+        ; Preserve AF' across the ROM READ call -- it carries the drive type.
+        EX AF,AF'
+        PUSH AF
+        EX AF,AF'
+
+        ; The ROM already selected 40H, but set it explicitly so this stage
+        ; is also correct if entered from a different monitor.
+        LD A,PIO_LINEAR64
+        LD (PIODA_BOOT),A
+
+        ; Load stage 2 into bank A RAM above the ROM overlay.
+        LD HL,BOOT2_LOAD
+        LD DE,BOOT2_TRACK          ; D = track high, E = track low
+        LD B,BOOT2_FIRST_SECTOR
+        LD C,BOOT2_FIRST_SECTOR+BOOT2_SECTORS-1
+        XOR A                       ; head 0
+        CALL ROM_DISKREAD
+
+        ; Restore AF' (unused past this point, but keep the contract).
+        EX AF,AF'
+        POP AF
+        EX AF,AF'
+
+        ; Relocate the 4 KB I/O block to F000H and replace the boot ROM
+        ; window at 0000H..03FFH with ordinary bank A RAM.
+        LD A,VLATCH_FINAL           ; F1H
+        LD (VLATCH_BOOT),A
+
+        JP BOOT2_LOAD
+
+        END
