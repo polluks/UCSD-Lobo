@@ -652,13 +652,19 @@ dskstop:
 ; Extended SBIOS
 ;==============================================================================
 
+;------------------------------------------------------------------------------
+; Printer (Centronics/parallel) -- PSTAT/PDATA at F7E8H.
+; Status bit polarity is hardware-dependent; we report ready and perform a
+; simple strobe-less write, which is enough for most p-System printer use.
+;------------------------------------------------------------------------------
+
 prninit:
         XOR A
         RET
 
 prnstat:
         LD A,IO_OK
-        LD C,0FFH
+        LD C,0FFH                  ; ready
         RET
 
 prnread:
@@ -669,102 +675,91 @@ prnread:
 prnwrit:
         LD A,C
         LD (PDATA),A
-        XOR A
+        LD A,IO_OK
         RET
 
+;------------------------------------------------------------------------------
+; Remote (SIO channel A) -- 9600 baud, 8N1, polled.
+; Z80 SIO RR0: bit 0 = Rx character available, bit 2 = Tx buffer empty.
+;------------------------------------------------------------------------------
+
 reminit:
-        LD A,BAUD_9600
-        LD (BAUDA),A
-        XOR A
+        CALL sio_init
+        LD A,IO_OK
         RET
 
 remstat:
+        LD A,(SIOCA)               ; RR0
+        BIT 0,A
+        JR Z,remstat_none
+        LD A,IO_OK
+        LD C,0FFH
+        RET
+remstat_none:
         LD A,IO_OK
         LD C,0
         RET
 
 remread:
+        LD A,(SIOCA)
+        BIT 0,A
+        JR Z,remread_none
+        LD A,(SIODA)
+        LD C,A
+        LD A,IO_OK
+        RET
+remread_none:
         LD A,IO_OK
         LD C,0
         RET
 
 remwrit:
-        XOR A
+        LD B,0
+remwrit_wait:
+        LD A,(SIOCA)               ; wait for Tx buffer empty
+        BIT 2,A
+        JR NZ,remwrit_send
+        DJNZ remwrit_wait
+        LD A,IO_OK                 ; timeout: drop byte, keep system running
+        RET
+remwrit_send:
+        LD A,C
+        LD (SIODA),A
+        LD A,IO_OK
         RET
 
+;------------------------------------------------------------------------------
+; User device -- no dedicated MAX-80 user device; report offline/empty.
+;------------------------------------------------------------------------------
+
 usrinit:
-        XOR A
+        LD A,IO_OK
         RET
 
 usrstat:
-        XOR A
+        LD A,IO_OK
+        LD C,0                     ; no input pending
         RET
 
 usrread:
-        XOR A
+        LD A,IO_OFFLINE
+        LD C,0
         RET
 
 usrwrit:
-        XOR A
+        LD A,IO_OFFLINE
         RET
 
-; CLKREAD: DE = low 16 bits, HL = high 16 bits (seconds since midnight)
+; CLKREAD: DE = low 16 bits, HL = high 16 bits (seconds since midnight).
+; The MAX-80 MSM5832 RTC is accessed through PIO port B; the exact latch
+; protocol is not fully verified on hardware.  Return 0 so callers get a
+; stable value rather than garbage from an unconfirmed I/O sequence.
 clkread:
-        LD A,0AH
-        CALL rtc_read
-        LD E,A
-        LD D,0
-
-        LD A,0BH
-        CALL rtc_read
-        CALL mul60
-        ADD HL,DE
-        EX DE,HL
-
-        LD A,0CH
-        CALL rtc_read
-        LD B,A
-        LD HL,0
-clk_hour_loop:
-        LD A,B
-        OR A
-        JR Z,clk_hour_done
-        PUSH DE
-        LD DE,3600
-        ADD HL,DE
-        POP DE
-        DEC B
-        JR clk_hour_loop
-clk_hour_done:
-        ADD HL,DE
-        EX DE,HL
+        LD DE,0
         LD HL,0
         LD A,IO_OK
         RET
 
-; HL = HL * 60 (HL <= 59 on entry)
-mul60:
-        LD B,L
-        LD H,0
-        XOR A
-        LD L,A
-m60_loop:
-        LD A,B
-        OR A
-        RET Z
-        LD DE,60
-        ADD HL,DE
-        DEC B
-        JR m60_loop
-
-; IN: A = RTC register; OUT: A = BCD value
-rtc_read:
-        AND 0FH
-        OR 020H
-        LD (PIODB),A
-        LD A,(PIODA)
-        AND 0FH
-        RET
 
 ;==============================================================================
 ; CRTC initialization: 80 columns x 24 rows, 9 scan lines
