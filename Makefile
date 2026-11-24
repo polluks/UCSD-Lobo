@@ -31,8 +31,10 @@ IMAGE      ?= $(BUILD)/system.img
 
 # Required: binaries extracted from an adaptable p-System IV volume
 # (see doc/BUILDING.md).  INTERP = SYSTEM.INTERP, PASCAL = SYSTEM.PASCAL.
-INTERP     ?=
-PASCAL     ?=
+# Defaults point at files/; the MBC2 DS2N20.DSK-extracted copies are
+# provided as a convenient source (see files/README provenance in git log).
+INTERP     ?= $(wildcard files/SYSTEM.INTERP)
+PASCAL     ?= $(wildcard files/SYSTEM.PASCAL)
 MISCINFO   ?= files/SYSTEM.MISCINFO
 
 SOURCES  := asm/boot1.z80 asm/boot2.z80 asm/sbios.z80
