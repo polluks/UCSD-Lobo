@@ -66,6 +66,10 @@ The second 1 KB of video RAM is reached through the SWAP1K window by temporarily
 
 ## 4. Build & installation workflow
 
+![UCSD p-System IV.0 booting on Lobo MAX-80 emulator](doc/boot-screenshot.png)
+
+*Representative boot banner (rendered from the SBIOS boot-chain message; SDL-less max80 emulator frame capture is not yet producing a usable VRAM dump in this environment).*
+
 Build on a modern host with a Z80 cross-assembler (`pasmo`) and Python 3:
 
 ```sh
