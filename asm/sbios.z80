@@ -579,6 +579,7 @@ ft_command:
         LD BC,512
 ft_loop:
         CALL fdc_wait_drq
+        JR C,ft_io_err
         LD A,(fdc_is_write)
         OR A
         JR NZ,ft_write_byte
@@ -604,6 +605,17 @@ ft_next:
         RET NZ
         XOR A
         RET
+ft_io_err:
+        LD A,(~FD_FORCE) & 0FFH
+        LD (FCTRL),A
+        LD A,(FSTAT)
+        CPL
+        AND 09FH
+        JR NZ,ft_io_fail
+        LD A,IO_READERR
+ft_io_fail:
+        OR A
+        RET
 
 fdc_offline:
         LD A,IO_OFFLINE
@@ -614,7 +626,13 @@ fdc_wait_drq:
         LD A,(FSTAT)
         CPL
         BIT 1,A
-        JR Z,fdc_wait_drq
+        JR NZ,fwd_got_drq
+        BIT 0,A
+        JR NZ,fdc_wait_drq
+        SCF
+        RET
+fwd_got_drq:
+        OR A
         RET
 
 fdc_wait_ready:
@@ -918,54 +936,52 @@ keytable:
 ;==============================================================================
 
 vid_put_char:
+        PUSH HL
+        PUSH DE
+        PUSH BC
         LD E,A
+        ; compute whether offset >= CRT_VISIBLE1 (0x400)
         LD A,H
-        AND 3
-        JP NZ,vp_second
+        CP 04H                    ; CRT_VISIBLE1 >> 8
+        JR C,vp_first
+        ; second 1KB half via SWAP1K
+        LD A,(vlatch_shadow)
+        LD B,A
+        LD A,VL_X_F | VL_SWAP_VID2
+        LD (VLATCH),A
+        PUSH DE
+        LD DE,CRT_VISIBLE1
+        OR A
+        SBC HL,DE
+        LD DE,SWAP1K
+        ADD HL,DE
+        POP DE
+        LD (HL),E
+        LD A,B
+        LD (VLATCH),A
+        JR vp_done
+vp_first:
         LD A,L
         ADD A,VIDEO_LO
         LD L,A
         LD A,H
         ADC A,VIDEO_HI
         LD H,A
-        LD A,E
-        LD (HL),A
-        RET
-
-vp_second:
-        LD A,(vlatch_shadow)
-        LD B,A
-        LD A,VL_X_F | VL_SWAP_VID2
-        LD (VLATCH),A
-        LD A,E
-        LD DE,CRT_VISIBLE1
-        OR A
-        SBC HL,DE
-        LD DE,SWAP1K
-        ADD HL,DE
-        LD (HL),A
-        LD A,B
-        LD (VLATCH),A
+        LD (HL),E
+vp_done:
+        POP BC
+        POP DE
+        POP HL
         RET
 
 ; IN: HL = offset; OUT: A = character; HL preserved
 vid_get_char:
         PUSH HL
-        LD A,H
-        AND 3
-        JP NZ,vg_second
-        LD A,L
-        ADD A,VIDEO_LO
-        LD L,A
-        LD A,H
-        ADC A,VIDEO_HI
-        LD H,A
-        LD A,(HL)
-        POP HL
-        RET
-
-vg_second:
+        PUSH DE
         PUSH BC
+        LD A,H
+        CP 04H                    ; CRT_VISIBLE1 >> 8
+        JR C,vg_first
         LD A,(vlatch_shadow)
         LD B,A
         LD A,VL_X_F | VL_SWAP_VID2
@@ -975,12 +991,22 @@ vg_second:
         SBC HL,DE
         LD DE,SWAP1K
         ADD HL,DE
-        LD A,(HL)
-        LD C,A
+        LD C,(HL)
         LD A,B
         LD (VLATCH),A
         LD A,C
+        JR vg_done
+vg_first:
+        LD A,L
+        ADD A,VIDEO_LO
+        LD L,A
+        LD A,H
+        ADC A,VIDEO_HI
+        LD H,A
+        LD A,(HL)
+vg_done:
         POP BC
+        POP DE
         POP HL
         RET
 

@@ -241,6 +241,7 @@ frs_cmd:
         LD BC,512
 frs_loop:
         CALL fdc_wait_drq
+        JR C,frs_read_err
         LD A,(FDATA)
         CPL
         LD (HL),A
@@ -255,12 +256,29 @@ frs_loop:
         CPL
         AND 09FH                   ; ignore write-protect and write-fault
         RET
+frs_read_err:
+        LD A,(~FD_FORCE) & 0FFH
+        LD (FCTRL),A
+        LD A,(FSTAT)
+        CPL
+        AND 09FH
+        JR NZ,frs_read_fail
+        LD A,IO_READERR
+frs_read_fail:
+        OR A
+        RET
 
 fdc_wait_drq:
         LD A,(FSTAT)
         CPL
         BIT 1,A
-        JR Z,fdc_wait_drq
+        JR NZ,fwd_got_drq
+        BIT 0,A
+        JR NZ,fdc_wait_drq         ; still busy
+        SCF                        ; command ended without DRQ
+        RET
+fwd_got_drq:
+        OR A
         RET
 
 fdc_wait_ready:
@@ -281,6 +299,8 @@ find_interp:
 fi_loop:
         PUSH HL
         PUSH BC
+        LD DE,DIR_NAME
+        ADD HL,DE
         LD DE,interp_name
         CALL name_equal
         POP BC
