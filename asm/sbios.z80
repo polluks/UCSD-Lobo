@@ -597,6 +597,7 @@ ft_next:
         OR C
         JR NZ,ft_loop
 
+        CALL fdc_wait_ready        ; the command ends after the two CRC bytes
         LD A,(FSTAT)
         CPL
         AND 09FH

@@ -39,7 +39,7 @@ SOURCES  := asm/boot1.z80 asm/boot2.z80 asm/sbios.z80
 INCLUDES := asm/include/max80.inc asm/include/sbios.inc asm/include/config.inc
 BINS     := $(BUILD)/boot1.bin $(BUILD)/boot2.bin $(BUILD)/sbios.bin
 
-.PHONY: all image check check-image check-portability test clean
+.PHONY: all image check check-image check-portability smoke test clean
 
 all: $(BINS)
 
@@ -77,6 +77,9 @@ check-portability:
 		cmp $(BUILD)/verify/$$src.pasmo.bin $(BUILD)/verify/$$src.vasm.bin; \
 		echo "OK  $$src: pasmo and vasm output identical"; \
 	done
+
+smoke: $(BINS)
+	$(PYTHON) tools/smoke_max80.py --asm $(ASM)
 
 test:
 	$(PYTHON) -m unittest discover -s tests -v

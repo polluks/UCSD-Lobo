@@ -250,6 +250,7 @@ frs_loop:
         OR C
         JR NZ,frs_loop
 
+        CALL fdc_wait_ready        ; the command ends after the two CRC bytes
         LD A,(FSTAT)
         CPL
         AND 09FH                   ; ignore write-protect and write-fault
