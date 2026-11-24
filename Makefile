@@ -33,7 +33,7 @@ IMAGE      ?= $(BUILD)/system.img
 # (see doc/BUILDING.md).  INTERP = SYSTEM.INTERP, PASCAL = SYSTEM.PASCAL.
 INTERP     ?=
 PASCAL     ?=
-MISCINFO   ?=
+MISCINFO   ?= files/SYSTEM.MISCINFO
 
 SOURCES  := asm/boot1.z80 asm/boot2.z80 asm/sbios.z80
 INCLUDES := asm/include/max80.inc asm/include/sbios.inc asm/include/config.inc

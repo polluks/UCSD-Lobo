@@ -77,6 +77,8 @@ make check-portability       # optional: verify both assemblers agree
 
 `doc/BUILDING.md` explains how to obtain `SYSTEM.INTERP` and `SYSTEM.PASCAL` from an adaptable p-System IV disk (for example the z80pack images) and how to configure `SYSTEM.MISCINFO` for the 80×24 console.
 
+The repository ships a default `SYSTEM.MISCINFO` (`files/SYSTEM.MISCINFO`) configured for the Lobo MAX-80 console; the Makefile uses it unless `MISCINFO=...` is given.
+
 The final image uses 512-byte logical blocks:
 
 | Block | Contents |

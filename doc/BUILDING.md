@@ -55,6 +55,30 @@ Edit `SYSTEM.MISCINFO` with `SETUP` inside the p-System so that:
 
 Rename the result to `SYSTEM.MISCINFO` and include it in the build.
 
+### Lobo MAX-80 default
+
+The repository ships a default `SYSTEM.MISCINFO` at `files/SYSTEM.MISCINFO`
+(the Apple II UCSD p-System IV payload, 192 bytes) configured for the Lobo
+MAX-80 console. The Makefile defaults `MISCINFO` to that file, so a plain
+
+```sh
+make ASM=pasmo \
+  INTERP=files/SYSTEM.INTERP \
+  PASCAL=files/SYSTEM.PASCAL \
+  image
+```
+
+includes it on the volume as `SYSTEM.MISCINFO` (file kind 5).  To use a
+different console configuration, pass your own payload:
+
+```sh
+make ASM=pasmo \
+  INTERP=files/SYSTEM.INTERP \
+  PASCAL=files/SYSTEM.PASCAL \
+  MISCINFO=files/MYCUSTOM.MISCINFO \
+  image
+```
+
 ## 3. Assemble and create the image
 
 Either supported assembler can be selected with `ASM`; pasmo is the default:

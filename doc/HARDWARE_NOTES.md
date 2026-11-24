@@ -29,7 +29,12 @@ Items that still need validation on physical hardware:
 4. **Timing.** Motor-refresh and FDC busy/DRQ polling loops are conservative;
    fast 8-inch or hard-disk operation may need tuning.
 5. **Escape sequences.** `CONWRIT` implements the subset of ADM-3A/ANSI codes
-   typically emitted by `SYSTEM.MISCINFO`. Check your MISCINFO settings.
+   typically emitted by `SYSTEM.MISCINFO`. Check your MISCINFO settings.  The
+   implemented set is: `ESC H` / `ESC [ H` (home), `ESC J` / `ESC [ J` (clear
+   screen), `ESC [ r;c H` (GOTOXY), `ESC [ J/K` (erase), and `ESC [ A/B/C/D`
+   (cursor movement).  Other final bytes (for example a bare `ESC E`) are not
+   implemented.  `ETX` (end-of-text/accept, `CRTINFO.ETX`) is likewise not handled
+   by the console layer yet.
 
 No physical MAX-80 or p-System disk image was available during development,
 so nothing in this repository has been validated on real hardware.

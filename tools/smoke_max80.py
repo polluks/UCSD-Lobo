@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BLOCK = 512
 SECTORS = 17
 TRACKS = 77
+MISCINFO = ROOT / "files" / "SYSTEM.MISCINFO"
 
 TEST_INTERP_ASM = """\
 ; Tiny SYSTEM.INTERP stand-in: print via SBIOS CONWRIT, then halt.
@@ -122,7 +123,10 @@ def main() -> int:
                            check=True, capture_output=True, text=True)
 
         (tmp / "SYSTEM.PASCAL").write_bytes(b"P" * BLOCK)
-        (tmp / "SYSTEM.MISCINFO").write_bytes(b"M" * BLOCK)
+        if MISCINFO.exists():
+            (tmp / "SYSTEM.MISCINFO").write_bytes(MISCINFO.read_bytes())
+        else:
+            (tmp / "SYSTEM.MISCINFO").write_bytes(b"M" * BLOCK)
 
         for name in ("boot1.bin", "boot2.bin", "sbios.bin"):
             if not (args.build / name).exists():
